@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -44,7 +44,7 @@ namespace UMassDM.Network
         public TokenStatus Status { get { return m_status; } set { m_status = value; } }
         #endregion
 
-        public DiscordClient(string token, string email, string pw, TokenStatus status = TokenStatus.Uninitialized, string useragent = null, string xsuperproperties = null, string ja3 = null, string proxy = null)
+        public DiscordClient(string token, string email, string pw, TokenStatus status = TokenStatus.Uninitialized, string proxy = null)
         {
             m_token = token;
             m_email = email;
@@ -54,10 +54,10 @@ namespace UMassDM.Network
             m_status = status;
             m_proxy = proxy != null ? proxy : string.Empty;
 
-            m_socket = new CurlClient(true, useragent, xsuperproperties, ja3);
+            m_socket = new CurlClient(true);
         }
 
-        public async Task<InviteResponse> JoinGuild(string invite_code, int attempt_idx = 0, DiscordCookie cookie = null, string xcontext = null, InvitePayload payload = null)
+        public InviteResponse JoinGuild(string invite_code, int attempt_idx = 0, DiscordCookie cookie = null, string xcontext = null, InvitePayload payload = null)
         {
             if (m_status != TokenStatus.Invalid)
             {
@@ -68,8 +68,10 @@ namespace UMassDM.Network
                     if (xcontext == null)
                         xcontext = await GetInvitationContext(invite_code, cookie.CookieString);
 
-                    var response = await m_socket.PostDiscord(string.Format("/invites/{0}", invite_code),
-                        m_token, true, string.Format(@"
+                    var response = await Request.SendGetDiscord(string.Format("/invites/{0}", invite_code),
+                        m_token, "POST",
+                        (payload != null ? payload.ToJSON() : "{}"),
+                        string.Format(@"
                     {{
                         'accept':               '*/*',
                         'accept-encoding':      'gzip, deflate, br',
@@ -83,22 +85,24 @@ namespace UMassDM.Network
 			            'sec-fetch-dest':       'empty',
 			            'sec-fetch-mode':       'cors',
 			            'sec-fetch-site':       'same-origin',
-			            'x-context-properties': '{1}',
+			            'user-agent':           '{1}',
+			            'x-context-properties': '{2}',
 			            'x-debug-options':      'bugReporterEnabled',
 			            'x-discord-locale':     'en-US',
-			            {2}
+			            {4}
+                        'x-super-properties':   '{3}',
                     }}
-                    ", cookie.CookieString, xcontext,
-                    cookie.Fingerprint == null ? "" : string.Format("'x-fingerprint':        '{0}',", cookie.Fingerprint)),
-                    (payload != null ? payload.ToJSON() : "{}"));
+                    ", cookie.CookieString, Config.Instance.UserAgent, xcontext, Config.Instance.XSuperProperties,
+                    cookie.Fingerprint == null ? "" : string.Format("'x-fingerprint':        '{0}',", cookie.Fingerprint)
+                    ));
 
-                    if (response.Data != null)
+                    if (response.Value != null)
                     {
-                        JObject res = JObject.Parse(response.Data);
+                        JObject res = JObject.Parse(response.Value);
 
-                        Console.WriteLine("{0}\n{1}", response.StatusCode, res.ToString());
+                        Console.WriteLine("{0}\n{1}", response.Key, response.Value);
 
-                        if (response.StatusCode == HttpStatusCode.BadRequest && response.Data.Contains("captcha_sitekey") && attempt_idx <= Config.Instance.Setting.CaptchaInviteRetryTimes)
+                        if (response.Key == HttpStatusCode.BadRequest && response.Value.Contains("captcha_sitekey") && attempt_idx <= Config.Instance.Setting.CaptchaInviteRetryTimes)
                         {
                             if (Config.Instance.Setting.CaptchaService != CaptchaService.Unset)
                             {
@@ -118,7 +122,7 @@ namespace UMassDM.Network
                                     try
                                     {
                                         // try to solve captcha
-                                        solution = await CaptchaResolver.SolveCaptcha(m_socket, captcha, cookie.CookieString, "https://discord.com/channels/@me", m_proxy, Config.Instance.Setting.CaptchaWaitTime);
+                                        solution = await CaptchaResolver.SolveCaptcha(captcha, cookie.CookieString, "https://discord.com/channels/@me", m_proxy, Config.Instance.Setting.CaptchaWaitTime);
 
                                         // on captcha solved
                                         if (!string.IsNullOrEmpty(solution))
@@ -159,15 +163,15 @@ namespace UMassDM.Network
                                 return InviteResponse.CaptchaServiceUnset;
                         }
 
-                        else if (response.StatusCode == (HttpStatusCode)429 && response.Data.Contains("1015"))
+                        else if (response.Key == (HttpStatusCode)429 && response.Value.Contains("1015"))
                             return InviteResponse.RateLimited;
 
-                        else if (response.StatusCode == HttpStatusCode.Forbidden)
+                        else if (response.Key == HttpStatusCode.Forbidden)
                             MainForm.Instance.PutLog(Color.DarkMagenta, "[{0}] Failed to join {1}: {2}.",
                                                m_username.Length > 0 ? string.Format("{0}#{1}", m_username, m_discriminator) : m_token,
                                                invite_code, res["message"]);
 
-                        else if (response.StatusCode == HttpStatusCode.OK)
+                        else if (response.Key == HttpStatusCode.OK)
                             return InviteResponse.Joined;
                     }
                     else
@@ -207,11 +211,11 @@ namespace UMassDM.Network
             return false;
         }
 
-        public async Task<TokenStatus> CheckTokenStatus()
+        public TokenStatus CheckTokenStatus()
         {
             try
             {
-                var request = await m_socket.GetDiscord("/users/@me?with_analytics_token=true", m_token);
+                var request = m_socket.GetDiscord("/users/@me?with_analytics_token=true", m_token);
                 if (request.Result == CURLcode.OK)
                 {
                     JObject res = JObject.Parse(request.Data);
@@ -238,13 +242,13 @@ namespace UMassDM.Network
         {
             try
             {
-                DiscordCookie cookie = new DiscordCookie(await m_socket.GetCookies("https://discord.com/"), null);
+                DiscordCookie dcookie = new DiscordCookie(await Request.GetCookies(), null);
 
-                var request = await m_socket.GetDiscord("/experiments");
+                var request = m_socket.GetDiscord("/experiments");
                 if (request.Result == CURLcode.OK)
-                    cookie.Fingerprint = JObject.Parse(request.Data)["fingerprint"].ToString();
+                    dcookie.Fingerprint = JObject.Parse(request.Data)["fingerprint"].ToString();
 
-                return cookie;
+                return dcookie;
             }
             catch (Exception ex)
             {
@@ -254,11 +258,11 @@ namespace UMassDM.Network
             return null;
         }
 
-        public async Task<string> GetInvitationContext(string invite_code, string cookie)
+        public string GetInvitationContext(string invite_code, string cookie)
         {
             try
             {
-                var request = await m_socket.GetDiscord(string.Format("/invites/{0}?inputValue={0}&with_counts=true&with_expiration=true", invite_code),
+                var request = m_socket.GetDiscord(string.Format("/invites/{0}?inputValue={0}&with_counts=true&with_expiration=true", invite_code),
                     m_token, true, string.Format(@"
                 {{
                     'accept':             '*/*',
@@ -278,12 +282,11 @@ namespace UMassDM.Network
                     // Get information of target guild
                     JObject guildinfo = JObject.Parse(request.Data);
 
-                    return new XContext
-                    {
-                        GuildID = guildinfo["guild"]["id"].ToString(),
-                        ChannelID = guildinfo["channel"]["id"].ToString(),
-                        ChannelType = Convert.ToSingle(guildinfo["channel"]["type"])
-                    }.ToString();
+                    return new XContext {
+                                            GuildID = guildinfo["guild"]["id"].ToString(),
+                                            ChannelID = guildinfo["channel"]["id"].ToString(),
+                                            ChannelType = Convert.ToSingle(guildinfo["channel"]["type"])
+                                        }.ToString();
                 }
             }
             catch (Exception ex)
@@ -294,7 +297,7 @@ namespace UMassDM.Network
             return null;
         }
 
-        public async Task<string> Username()
+        public string Username()
         {
             if (m_status != TokenStatus.Invalid)
             {
@@ -304,7 +307,7 @@ namespace UMassDM.Network
                 {
                     try
                     {
-                        var request = await m_socket.GetDiscord("/users/@me?with_analytics_token=true", m_token);
+                        var request = m_socket.GetDiscord("/users/@me?with_analytics_token=true", m_token);
                         if (request.Result == CURLcode.OK)
                         {
                             JObject res = JObject.Parse(request.Data);

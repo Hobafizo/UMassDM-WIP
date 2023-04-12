@@ -31,7 +31,7 @@ namespace UMassDM
             JoinGuild
         }
 
-        public static bool Debugging = true;
+        public static bool Debugging = false;
         
         private const string AppName    = "UMassDM",
                              AppDesc    = "Why don't you make it easier!",
@@ -76,26 +76,32 @@ namespace UMassDM
 
         private void MainForm_Load(object sender, EventArgs e)
         {
-            LoadTitle();
-
-            Request.FixSSLTlsChannels();
-
-            if (Config.Instance.Load())
+            try
             {
-                PutLog(Color.LimeGreen, "{0} configuration loaded succcessfully.", AppName);
+                LoadTitle();
 
-                LoadPanel(PanelType.All);
+                if (Config.Instance.Load())
+                {
+                    PutLog(Color.LimeGreen, "{0} configuration loaded succcessfully.", AppName);
 
-                // Load tokens status (valid, invalid?)
-                HandleTokensAction(ActionType.StatusCheck);
+                    LoadPanel(PanelType.All);
 
-                TestShyt();
+                    // Load tokens status (valid, invalid?)
+                    HandleTokensAction(ActionType.StatusCheck);
+
+                    TestShyt();
+                }
+                else
+                    PutLog(Color.DarkRed, "Failed to load {0} configuration.", AppName);
+
+                this.ConfigStatus.Image = Config.Instance.Loaded ? Properties.Resources.checkbox : Properties.Resources.xx;
+                LoadTitle(true);
             }
-            else
-                PutLog(Color.DarkRed, "Failed to load {0} configuration.", AppName);
-
-            this.ConfigStatus.Image = Config.Instance.Loaded ? Properties.Resources.checkbox : Properties.Resources.xx;
-            LoadTitle(true);
+            catch (Exception ex)
+            {
+                if (MainForm.Debugging)
+                    Logger.Show(LogType.Error, ex.ToString());
+            }
         }
 
         #region Log Box Events
@@ -129,7 +135,20 @@ namespace UMassDM
         private async void TestShyt()
         {
             //Console.WriteLine(await Config.Instance.Tokens[0].Username());
-            await Config.Instance.Tokens[0].JoinGuild("vGFKXNpEQr");
+            await Config.Instance.Tokens[0].JoinGuild("rhd57rDaeS");
+
+            /*UMassDM.Network.Branches.CaptchaPayload captcha = new Network.Branches.CaptchaPayload();
+            captcha.captcha_sitekey = "a9b5fb07-92ff-493f-86fe-352a2803b3df";
+            captcha.captcha_rqdata  = "SiCjfbe3RbGulVxK5330YnDxHdL+YI80L7s/DyG4ul0RjPSC0Kervst2Zv5/GxvK+RqogSokfj70AJbsVvsXprSQR2pIJU1283pESTDGcBwKXe+13PKQTp3cyoXjhUtxkQCv8zqlkExVjUGoF53NOw==y5JclQYbRrM5ShBd";
+            captcha.captcha_rqtoken = "ImdvV1BIUnV2VkJvR25wYklSY0FQSUxhWWxPT0JTUmdaRUgrYzlFWHJHdVFZV3E3azkrcWdIMkVvYlZOd2E4V2RERVhKWGc9PUtsejdUOHUwWHc1RmdrcWwi.ZC8jKg.cxLGN9Cu4iGye_FyWMc24m5mf04";
+
+            string cookie = "__dcfduid=ea124c70d4aa11ed83afe1895f435491; __sdcfduid=ea124c71d4aa11ed83afe1895f43549128066ecce57776757adb5a78614bfad9f4d2c518551eea579f3d6f0ef5283650; __cfruid=b945d3121ba3022afabfa4d21f7b3cb3bebe4778-1680806605; locale=en-US";
+            string solution = await CaptchaResolver.SolveCaptcha(captcha, cookie, "https://discord.com/channels/@me", "", Config.Instance.Setting.CaptchaWaitTime);
+
+            Console.WriteLine(@"{{
+                                    ""captcha_key"": ""{0}"",
+                                    ""captcha_rqtoken"": ""{1}""
+                                }}", solution, captcha.captcha_rqtoken);*/
         }
 
         private void LoadPanel(PanelType panel)

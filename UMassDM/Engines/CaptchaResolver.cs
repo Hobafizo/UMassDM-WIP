@@ -8,31 +8,50 @@ using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using UMassDM.Network;
 using UMassDM.Network.Branches;
+using UMassDM.Utils;
+using Zennolab.CapMonsterCloud;
+using Zennolab.CapMonsterCloud.Requests;
 
 namespace UMassDM.Engines
 {
     public class CaptchaResolver
     {
         // Time to wait before re-checking captcha request status.
-        private const int RequestStatusCheckDelay = 5000;
+        private const int CaptchaStatusCheckDelay = 5000;
+        private const int CapSolverStatusCheckDelay = 5000;
 
-        public static async Task<string> SolveCaptcha(CaptchaPayload payload, string cookie, string url, string proxy)
+        public static async Task<string> SolveCaptcha(CurlClient client, CaptchaPayload payload, string cookie, string url, string proxy, int timeout = 0)
         {
-            switch (Config.Instance.Setting.CaptchaService)
-            {
-                case CaptchaService.RUCaptcha:
-                case CaptchaService.TwoCaptcha:
-                    return await Solve2Captcha(payload, url, proxy);
-            }
+            if (timeout > 0)
+                return await GetCaptchaSolution(client, payload, cookie, url, proxy).TimeoutAfter(TimeSpan.FromSeconds(Config.Instance.Setting.CaptchaWaitTime));
+            return await GetCaptchaSolution(client, payload, cookie, url, proxy);
+        }
 
+        private static async Task<string> GetCaptchaSolution(CurlClient client, CaptchaPayload payload, string cookie, string url, string proxy)
+        {
+            CaptchaServiceInfo service = Config.Instance.GetCaptchaService();
+            if (service != null)
+            {
+                switch (service.Type)
+                {
+                    case CaptchaService.RUCaptcha:
+                    case CaptchaService.TwoCaptcha:
+                        return await Solve2Captcha(client, service, payload, url, proxy);
+
+                    case CaptchaService.CapMonster:
+                        return await SolveCapMonster(client, service, payload, url, proxy);
+
+                    case CaptchaService.CapSolver:
+                        return await SolveCapSolver(client, service, payload, url, proxy);
+                }
+            }
             return null;
         }
 
-        private static async Task<string> Solve2Captcha(CaptchaPayload payload, string url, string proxy)
+        private static async Task<string> Solve2Captcha(CurlClient client, CaptchaServiceInfo service, CaptchaPayload payload, string url, string proxy)
         {
-            const string request_url =  "https://2captcha.com/in.php",
+            const string request_url = "https://2captcha.com/in.php",
                          response_url = "https://2captcha.com/res.php";
-            string host = Config.Instance.Setting.CaptchaService == CaptchaService.RUCaptcha ? "rucaptcha.com" : "2captcha.com";
 
             try
             {
@@ -67,14 +86,14 @@ namespace UMassDM.Engines
                     query[entry.Key] = entry.Value.ToString();
                 }
 
-                uri.Host = host;
+                uri.Host = service.Host;
                 uri.Query = query.ToString();
 
                 // send captcha solution request
-                var response = await Request.SendGet(uri.ToString());
-                if (response.Key == HttpStatusCode.OK && response.Value != null)
+                var response = await client.Get(uri.ToString());
+                if (response.StatusCode == HttpStatusCode.OK)
                 {
-                    TwoCaptchaSubmitResponse reqinfo = new TwoCaptchaSubmitResponse(response.Value);
+                    TwoCaptchaSubmitResponse reqinfo = new TwoCaptchaSubmitResponse(response.Data);
 
                     // on captcha request accepted & processing
                     if (reqinfo.status == 1)
@@ -95,25 +114,26 @@ namespace UMassDM.Engines
                             query[entry.Key] = entry.Value.ToString();
                         }
 
-                        uri.Host = host;
+                        uri.Host = service.Host;
                         uri.Query = query.ToString();
 
                         // loop captcha request status
                         while (true)
                         {
-                            await Task.Delay(RequestStatusCheckDelay);
+                            await Task.Delay(CaptchaStatusDelay(service.Type));
 
-                            response = await Request.SendGet(uri.ToString());
-                            if (response.Key == HttpStatusCode.OK && response.Value != null)
+                            response = await client.Get(uri.ToString());
+                            if (response.StatusCode == HttpStatusCode.OK)
                             {
-                                reqinfo.Load(response.Value);
+                                reqinfo.Load(response.Data);
 
-                                /*if (reqinfo.request == "CAPCHA_NOT_READY") //captcha is not ready yet
+                                /*if (reqinfo.request != "CAPCHA_NOT_READY") //captcha is not ready yet
                                 {
 
                                 }
                                  
-                                else*/ if (reqinfo.request.Contains("ERROR")) //service faced an error while solving
+                                else*/
+                                if (reqinfo.request.Contains("ERROR")) //service faced an error while solving
                                     return null;
 
                                 else if (reqinfo.status == 1) // captcha is solved!
@@ -125,9 +145,136 @@ namespace UMassDM.Engines
             }
             catch (Exception ex)
             {
-                Logger.Show(LogType.Error, "[Captcha Resolver] {0}", ex.ToString());
+                Logger.Show(LogType.Error, "[Captcha Resolver] Exception caught on solving 2Captcha: {0}", ex.ToString());
             }
             return null;
+        }
+
+        private static async Task<string> SolveCapMonster(CurlClient client, CaptchaServiceInfo service, CaptchaPayload payload, string url, string proxy)
+        {
+            // NOT TESTED, 99% BUGGED
+
+            try
+            {
+                var clientOptions = new ClientOptions
+                {
+                    ClientKey = Config.Instance.Setting.CaptchaAPIKey
+                };
+
+                var cmCloudClient = CapMonsterCloudClientFactory.Create(clientOptions);
+
+                // solve HCaptcha (without proxy)
+                var hcaptchaRequest = new HCaptchaProxylessRequest
+                {
+                    WebsiteUrl = url,
+                    WebsiteKey = payload.captcha_sitekey
+                };
+
+                var res = await cmCloudClient.SolveAsync(hcaptchaRequest);
+                if (!res.Error.HasValue)
+                    return res.Solution.Value;
+            }
+            catch (Exception ex)
+            {
+                Logger.Show(LogType.Error, "[Captcha Resolver] Exception caught on solving Cap Monster: {0}", ex.ToString());
+            }
+            return null;
+        }
+
+        private static async Task<string> SolveCapSolver(CurlClient client, CaptchaServiceInfo service, CaptchaPayload payload, string url, string proxy)
+        {
+            const string request_url  = "https://api.capsolver.com/createTask",
+                         response_url = "https://api.capsolver.com/getTaskResult";
+
+            try
+            {
+                // send captcha solution request
+                var response = await client.Post(request_url, null, false, string.Format("{{ 'Host': '{0}' }}", service.Host),
+                    string.Format(@"{{
+                                        'clientKey':                '{0}',
+
+                                        'task':
+                                        {{
+                                            'type':                 '{3}',
+                                            'websiteURL':           '{2}',
+                                            'websiteKey':           '{1}',
+                                            'isInvisible':          true,
+                                            {4}
+                                            {5}
+                                            'userAgent':            '{6}'
+                                        }}
+                                    }}"
+                , Config.Instance.Setting.CaptchaAPIKey, payload.captcha_sitekey, url, !Config.Instance.Setting.CaptchaUseProxy ? "HCaptchaEnterpriseTaskProxyLess" : "HCaptchaEnterpriseTask",
+
+                string.IsNullOrEmpty(payload.captcha_rqdata) ? "" : string.Format(@"
+                        'enterprisePayload':
+                        {{
+                            'rqdata':   '{0}'
+                        }},
+                       ", payload.captcha_rqdata),
+
+                !Config.Instance.Setting.CaptchaUseProxy ? "" : string.Format(@"
+                        'proxy':        '{0}',  
+                        'enableIPV6':   false,
+                       ", "de.proxiware.com:22001"),
+
+                     Config.Instance.UserAgent));
+
+                if (response.StatusCode == HttpStatusCode.OK)
+                {
+                    CapSolverSubmitResponse reqinfo = new CapSolverSubmitResponse(response.Data);
+
+                    // on captcha request accepted & processing
+                    if (reqinfo.errorId == 0)
+                    {
+                        CapSolverTaskResult result = new CapSolverTaskResult();
+
+                        // loop captcha request status
+                        while (true)
+                        {
+                            await Task.Delay(CaptchaStatusDelay(service.Type));
+
+                            response = await client.Post(response_url, null, false, string.Format("{{ 'Host': '{0}' }}", service.Host),
+                                string.Format(@"{{
+                                                    'clientKey':    '{0}',
+                                                    'taskId':       '{1}'
+                                                }}", Config.Instance.Setting.CaptchaAPIKey, reqinfo.taskId));
+
+                            if (response.StatusCode == HttpStatusCode.OK)
+                            {
+                                result.Load(response.Data);
+
+                                /*if (result.status != "ready") //captcha is not ready yet
+                                {
+
+                                }
+                                 
+                                else*/
+                                if (result.errorId != 0) //service faced an error while solving
+                                    return null;
+
+                                else if (result.status == "ready") // captcha is solved!
+                                    return result.solution.gRecaptchaResponse;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Show(LogType.Error, "[Captcha Resolver] Exception caught on solving 2Captcha: {0}", ex.ToString());
+            }
+            return null;
+        }
+
+        private static int CaptchaStatusDelay(CaptchaService type)
+        {
+            switch (type)
+            {
+                case CaptchaService.CapSolver:
+                    return CapSolverStatusCheckDelay;
+            }
+            return CaptchaStatusCheckDelay;
         }
     }
 }

@@ -12,7 +12,23 @@ namespace UMassDM.Engines
     {
         Unset,
         TwoCaptcha,
-        RUCaptcha
+        RUCaptcha,
+        CapMonster,
+        CapSolver
+    }
+
+    public class CaptchaServiceInfo
+    {
+        public CaptchaService Type;
+        public string Name;
+        public string Host;
+
+        public CaptchaServiceInfo(CaptchaService type, string name, string host)
+        {
+            Type = type;
+            Name = name;
+            Host = host;
+        }
     }
 
     public struct Settings
@@ -46,6 +62,7 @@ namespace UMassDM.Engines
 
         public Settings Setting;
 
+        private List<CaptchaServiceInfo> CaptchaServices;
         public List<DiscordClient> Tokens;
 
         public bool Loaded { get { return m_loaded; } }
@@ -59,6 +76,14 @@ namespace UMassDM.Engines
         {
             Tokens = new List<DiscordClient>();
 
+            CaptchaServices = new List<CaptchaServiceInfo>()
+            {
+                new CaptchaServiceInfo(CaptchaService.TwoCaptcha, "2captcha",   "2captcha.com"),
+                new CaptchaServiceInfo(CaptchaService.RUCaptcha,  "rucaptcha",  "rucaptcha.com"),
+                new CaptchaServiceInfo(CaptchaService.CapMonster, "capmonster", "capmonster.cloud"),
+                new CaptchaServiceInfo(CaptchaService.CapSolver,  "capsolver",  "api.capsolver.com")
+            };
+
             // Defaults
             m_apiver = 10;
             m_useragent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36";
@@ -68,7 +93,7 @@ namespace UMassDM.Engines
 
         public bool Load()
         {
-            string buffer;
+            CaptchaServiceInfo captcha;
 
             try
             {
@@ -80,7 +105,8 @@ namespace UMassDM.Engines
                 Setting.ExcludeInvalid = bool.Parse(cfg.Read("ExcludeInvalidToken", "Main"));
 
                 // Captcha settings load
-                Setting.CaptchaService = ParseCaptchaService(buffer = cfg.Read("Captcha_API", "Captcha"));
+                captcha = GetCaptchaService(cfg.Read("Captcha_API", "Captcha"));
+                Setting.CaptchaService = captcha != null ? captcha.Type : CaptchaService.Unset;
                 Setting.CaptchaAPIKey = cfg.Read("Captcha_API_Key", "Captcha");
                 Setting.CaptchaWaitTime = int.Parse(cfg.Read("Captcha_WaitTime", "Captcha"));
                 Setting.CaptchaDMRetryTimes = int.Parse(cfg.Read("Captcha_RetryTimes_DM", "Captcha"));
@@ -139,7 +165,7 @@ namespace UMassDM.Engines
                     {
                         splitter = line.Split(':');
                         if (splitter.Length == 3)
-                            Tokens.Add(new DiscordClient(splitter[2], splitter[0], splitter[1]));
+                            Tokens.Add(new DiscordClient(splitter[2], splitter[0], splitter[1], TokenStatus.Uninitialized, m_useragent, m_xsuperproperties, m_ja3));
                     }
                 }
             }
@@ -152,12 +178,13 @@ namespace UMassDM.Engines
             try
             {
                 IniFile cfg = new IniFile(CfgPath);
+                CaptchaServiceInfo captcha = GetCaptchaService();
 
                 cfg.Write("JoinWaitTime", Setting.JoinWaitTime.ToString(), "Main");
                 cfg.Write("JoinDelayBeforeToken", Setting.JoinDelayBeforeToken.ToString(), "Main");
                 cfg.Write("ExcludeInvalidToken", Setting.ExcludeInvalid.ToString(), "Main");
 
-                cfg.Write("Captcha_API", ParseCaptchaServiceStr(Setting.CaptchaService), "Captcha");
+                cfg.Write("Captcha_API", captcha != null ? captcha.Name : "", "Captcha");
                 cfg.Write("Captcha_API_Key", Setting.CaptchaAPIKey, "Captcha");
                 cfg.Write("Captcha_WaitTime", Setting.CaptchaWaitTime.ToString(), "Captcha");
                 cfg.Write("Captcha_RetryTimes_DM", Setting.CaptchaDMRetryTimes.ToString(), "Captcha");
@@ -210,28 +237,19 @@ namespace UMassDM.Engines
             }
         }
 
-        private CaptchaService ParseCaptchaService(string str)
+        public CaptchaServiceInfo GetCaptchaService(string name)
         {
-            switch (str.ToLower())
-            {
-                case "2captcha":
-                    return CaptchaService.TwoCaptcha;
-                case "rucaptcha":
-                    return CaptchaService.RUCaptcha;
-            }
-            return CaptchaService.Unset;
+            return CaptchaServices.FirstOrDefault(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
         }
 
-        private string ParseCaptchaServiceStr(CaptchaService service)
+        public CaptchaServiceInfo GetCaptchaService()
         {
-            switch (service)
-            {
-                case CaptchaService.TwoCaptcha:
-                    return "2captcha";
-                case CaptchaService.RUCaptcha:
-                    return "rucaptcha";
-            }
-            return string.Empty;
+            return GetCaptchaService(Setting.CaptchaService);
+        }
+
+        public CaptchaServiceInfo GetCaptchaService(CaptchaService type)
+        {
+            return CaptchaServices.FirstOrDefault(x => x.Type == type);
         }
     }
 }
