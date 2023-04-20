@@ -18,6 +18,15 @@ namespace UMassDM
         public static MainForm Instance;
 
         #region Static Config
+
+        public static bool Debugging = true;
+
+        private const string AppName = "UMassDM",
+                             AppDesc = "Why don't you make it easier!",
+                             AppVersion = "1.0.0";
+
+        private const int StatusCheckTimeout = 10, JoinGuildTimeout = 30;
+
         enum PanelType : byte
         {
             Tokens = 1,
@@ -30,14 +39,6 @@ namespace UMassDM
             StatusCheck,
             JoinGuild
         }
-
-        public static bool Debugging = false;
-        
-        private const string AppName    = "UMassDM",
-                             AppDesc    = "Why don't you make it easier!",
-                             AppVersion = "1.0.0";
-
-        private const int StatusCheckTimeout = 10, JoinGuildTimeout = 30;
         #endregion
 
         public MainForm()
@@ -85,11 +86,7 @@ namespace UMassDM
                     PutLog(Color.LimeGreen, "{0} configuration loaded succcessfully.", AppName);
 
                     LoadPanel(PanelType.All);
-
-                    // Load tokens status (valid, invalid?)
-                    HandleTokensAction(ActionType.StatusCheck);
-
-                    TestShyt();
+                    new Thread(x => OnStartup()).Start();
                 }
                 else
                     PutLog(Color.DarkRed, "Failed to load {0} configuration.", AppName);
@@ -131,6 +128,15 @@ namespace UMassDM
             Clipboard.SetText(lstLogBox.SelectedItem.ToString());
         }
         #endregion
+
+        private async void OnStartup()
+        {
+            // Load tokens status (valid, invalid?)
+            await HandleTokensAction(ActionType.StatusCheck);
+            PutLog(Color.Green, "Tokens status check had finished.");
+
+            TestShyt();
+        }
 
         private async void TestShyt()
         {
@@ -216,8 +222,10 @@ namespace UMassDM
             }
         }
 
-        private void HandleTokensAction(ActionType type, int threadcnt = -1)
+        private Task HandleTokensAction(ActionType type, int threadcnt = -1)
         {
+            int delay = GetThreadTimeoutDelay(type);
+
             //one thread
             if (threadcnt == 0)
             {
@@ -228,7 +236,14 @@ namespace UMassDM
                 });
                 th.Start();
 
-                HandleThreadTimeout(type, th);
+                return Task.Delay(delay)
+                    .ContinueWith(x =>
+                    {
+                        if (th.IsAlive)
+                            th.Abort();
+
+                        ExcludeInvalidTokens();
+                    });
             }
 
             //thread limited
@@ -249,11 +264,21 @@ namespace UMassDM
                     threads.Add(th);
                 }
 
-                HandleThreadTimeout(type, threads);
+                return Task.Delay(delay)
+                    .ContinueWith(x =>
+                    {
+                        foreach (Thread thread in threads)
+                        {
+                            if (thread.IsAlive)
+                                thread.Abort();
+                        }
+
+                        ExcludeInvalidTokens();
+                    });
             }
         }
 
-        private async void HandleThreadTimeout(ActionType action, Thread thread)
+        private int GetThreadTimeoutDelay(ActionType action)
         {
             int delay = 1000;
 
@@ -268,47 +293,17 @@ namespace UMassDM
                     break;
             }
 
-            await Task.Delay(delay);
-            if (thread.IsAlive)
-                thread.Abort();
-
-            ExcludeInvalidTokens();
-        }
-
-        private async void HandleThreadTimeout(ActionType action, List<Thread> threads)
-        {
-            string msg = null;
-            int delay = 1000;
-
-            switch (action)
-            {
-                case ActionType.StatusCheck:
-                    msg = "Tokens status check had finished.";
-                    delay *= StatusCheckTimeout;
-                    break;
-
-                case ActionType.JoinGuild:
-                    delay *= JoinGuildTimeout;
-                    break;
-            }
-
-            await Task.Delay(delay);
-            foreach (Thread thread in threads)
-            {
-                if (thread.IsAlive)
-                    thread.Abort();
-            }
-
-            if (!string.IsNullOrEmpty(msg))
-                PutLog(Color.Green, msg);
-
-            ExcludeInvalidTokens();
+            return delay;
         }
 
         private void ExcludeInvalidTokens()
         {
             Config.Instance.ExcludeInvalidTokens();
-            LoadPanel(PanelType.Tokens);
+
+            this.Invoke((MethodInvoker)delegate
+            {
+                LoadPanel(PanelType.Tokens);
+            });
         }
     }
 }

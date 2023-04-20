@@ -35,6 +35,7 @@ namespace UMassDM.Network
         private CurlClient m_socket;
         private TokenStatus m_status;
         private string m_token, m_email, m_password;
+        private ulong m_userid;
         private string m_username, m_discriminator;
         private string m_proxy;
 
@@ -49,6 +50,7 @@ namespace UMassDM.Network
             m_token = token;
             m_email = email;
             m_password = pw;
+            m_userid = 0;
             m_username = string.Empty;
             m_discriminator = string.Empty;
             m_status = status;
@@ -59,7 +61,7 @@ namespace UMassDM.Network
 
         public async Task<InviteResponse> JoinGuild(string invite_code, int attempt_idx = 0, DiscordCookie cookie = null, string xcontext = null, InvitePayload payload = null)
         {
-            if (m_status != TokenStatus.Invalid)
+            if (m_status == TokenStatus.Valid)
             {
                 try
                 {
@@ -72,12 +74,10 @@ namespace UMassDM.Network
                         m_token, true, string.Format(@"
                     {{
                         'accept':               '*/*',
-                        'accept-encoding':      'gzip, deflate, br',
 			            'accept-language':      'en-US,en;q=0.9',
 			            'cookie':               '{0}',
 			            'origin':               'https://discord.com',
 			            'referer':              'https://discord.com/channels/@me',
-                        'sec-ch-ua':            '""Google Chrome"";v=""111"", ""Not(A: Brand""; v=""8"", ""Chromium""; v=""111""',
                         'sec-ch-ua-mobile':     '?0',
                         'sec-ch-ua-platform':   '""Windows""',
 			            'sec-fetch-dest':       'empty',
@@ -184,17 +184,72 @@ namespace UMassDM.Network
 
         public async Task<bool> MassDMTest()
         {
-            if (m_status != TokenStatus.Invalid)
+            if (m_status == TokenStatus.Valid)
             {
                 try
                 {
-                    var request = await Request.SendGetDiscord("/users/@me/channels", m_token);
-                    if (request.Value != null)
+                    var request = await m_socket.GetDiscord("/users/@me/channels", m_token);
+                    if (request.Result == CURLcode.OK)
                     {
-                        var array = JArray.Parse(request.Value);
+                        var array = JArray.Parse(request.Data);
 
                         foreach (var entry in array)
                             Console.WriteLine(entry);
+                        return true;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    if (MainForm.Debugging)
+                        Logger.Show(LogType.Error, "[Discord Client] {0}", ex.ToString());
+                }
+            }
+            return false;
+        }
+
+        public async Task<bool> RegenerateToken()
+        {
+            if (m_status == TokenStatus.Valid)
+            {
+                try
+                {
+                    DiscordCookie cookie = await GetCookies();
+
+                    var login = await m_socket.PostDiscord("/auth/login", null, true, string.Format(@"
+                    {{
+                        'accept':               '*/*',
+			            'accept-language':      'en-US,en;q=0.9',
+			            'cookie':               '{0}',
+			            'origin':               'https://discord.com',
+			            'referer':              'https://discord.com/login',
+                        'sec-ch-ua-mobile':     '?0',
+                        'sec-ch-ua-platform':   '""Windows""',
+			            'sec-fetch-dest':       'empty',
+			            'sec-fetch-mode':       'cors',
+			            'sec-fetch-site':       'same-origin',
+			            'x-debug-options':      'bugReporterEnabled',
+			            'x-discord-locale':     'en-US',
+			            {1}
+                    }}
+                    ", cookie.CookieString,
+                    cookie.Fingerprint == null ? "" : string.Format("'x-fingerprint':        '{0}',", cookie.Fingerprint)),
+                    
+                    string.Format(@"
+                    {{
+                        'captcha_key':          null,
+                        'gift_code_sku_id':     null,
+                        'login_source':         null,
+                        'login':                '{0}',
+                        'password':             '{1}',
+                        'undelete':             false
+                    }}", m_email, m_password));
+
+                    if (login.Result == CURLcode.OK)
+                    {
+                        m_token = JObject.Parse(login.Data)["token"].ToString();
+
+                        var array = JObject.Parse(login.Data);
+                        Console.WriteLine(array.ToString());
                         return true;
                     }
                 }
@@ -222,8 +277,11 @@ namespace UMassDM.Network
                     if (username.Length > 0 && discriminator.Length == 4)
                     {
                         m_status = TokenStatus.Valid;
+                        m_userid = Convert.ToUInt64(res["id"]);
                         m_username = username;
                         m_discriminator = discriminator;
+
+                        //await RegenerateToken();
                         return m_status;
                     }
                 }

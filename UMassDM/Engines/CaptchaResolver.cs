@@ -42,7 +42,7 @@ namespace UMassDM.Engines
                         return await SolveCapMonster(client, service, payload, url, proxy);
 
                     case CaptchaService.CapSolver:
-                        return await SolveCapSolver(client, service, payload, url, proxy);
+                        return await SolveCapSolver(client, service, payload, url, proxy, true);
                 }
             }
             return null;
@@ -181,7 +181,7 @@ namespace UMassDM.Engines
             return null;
         }
 
-        private static async Task<string> SolveCapSolver(CurlClient client, CaptchaServiceInfo service, CaptchaPayload payload, string url, string proxy)
+        private static async Task<string> SolveCapSolver(CurlClient client, CaptchaServiceInfo service, CaptchaPayload payload, string url, string proxy, bool turbo = false)
         {
             const string request_url  = "https://api.capsolver.com/createTask",
                          response_url = "https://api.capsolver.com/getTaskResult";
@@ -204,7 +204,9 @@ namespace UMassDM.Engines
                                             'userAgent':            '{6}'
                                         }}
                                     }}"
-                , Config.Instance.Setting.CaptchaAPIKey, payload.captcha_sitekey, url, !Config.Instance.Setting.CaptchaUseProxy ? "HCaptchaEnterpriseTaskProxyLess" : "HCaptchaEnterpriseTask",
+                , Config.Instance.Setting.CaptchaAPIKey, payload.captcha_sitekey, url,
+                !turbo ? (!Config.Instance.Setting.CaptchaUseProxy ? "HCaptchaEnterpriseTaskProxyLess" : "HCaptchaEnterpriseTask")
+                : (!Config.Instance.Setting.CaptchaUseProxy ? "HCaptchaTurboTaskProxyLess" : "HCaptchaTurboTask"),
 
                 string.IsNullOrEmpty(payload.captcha_rqdata) ? "" : string.Format(@"
                         'enterprisePayload':

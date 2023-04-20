@@ -1,0 +1,5 @@
+https://scrapfly.io/web-scraping-tools/ja3-fingerprint
+https://scrapfly.io/blog/how-to-avoid-web-scraping-blocking-tls/#how-to-fake-tls-fingerprint
+https://medium.com/cu-cyber/impersonating-ja3-fingerprints-b9f555880e42
+https://lwthiker.com/networks/2022/06/17/tls-fingerprinting.html
+https://tls13.xargs.org/
